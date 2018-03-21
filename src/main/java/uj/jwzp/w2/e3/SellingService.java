@@ -1,6 +1,5 @@
 package uj.jwzp.w2.e3;
 
-import uj.jwzp.w2.e3.external.DiscountsConfig;
 import uj.jwzp.w2.e3.external.PersistenceLayer;
 
 import java.math.BigDecimal;
@@ -8,25 +7,41 @@ import java.math.BigDecimal;
 public final class SellingService {
 
     private final PersistenceLayer persistenceLayer;
-    final CustomerMoneyService moneyService;
+    private final CustomerMoneyService customerMoneyService;
+    private final BigDecimal discountValue;
+    private final BigDecimal discountThreshold;
+    private final DiscountsConfigProxy discountsConfigProxy;
 
-    public SellingService(PersistenceLayer persistenceLayer) {
+    public SellingService(PersistenceLayer persistenceLayer, CustomerMoneyService customerMoneyService,
+                          BigDecimal discountValue, BigDecimal discountThreshold,
+                          DiscountsConfigProxy discountsConfigProxy) {
         this.persistenceLayer = persistenceLayer;
         this.persistenceLayer.loadDiscountConfiguration();
-        this.moneyService = new CustomerMoneyService(this.persistenceLayer);
+        this.customerMoneyService = customerMoneyService;
+        this.discountValue = discountValue;
+        this.discountThreshold = discountThreshold;
+        this.discountsConfigProxy = discountsConfigProxy;
+    }
+
+    public BigDecimal calculatePrice (Item item, int quantity, Customer customer) {
+        BigDecimal ItemPriceWithDiscounts = item.getPrice().subtract(discountsConfigProxy.getDiscountForItem(item, customer));
+        BigDecimal totalPrice = ItemPriceWithDiscounts.multiply(BigDecimal.valueOf(quantity));
+        if (discountsConfigProxy.isWeekendPromotion() && totalPrice.compareTo(discountThreshold) > 0)
+           totalPrice = totalPrice.subtract(discountValue);
+        return totalPrice;
+    }
+
+    public CustomerMoneyService getCustomerMoneyService() {
+        return customerMoneyService;
     }
 
     public boolean sell(Item item, int quantity, Customer customer) {
-        BigDecimal money = moneyService.getMoney(customer);
-        BigDecimal price = item.getPrice().subtract(DiscountsConfig.getDiscountForItem(item, customer)).multiply(BigDecimal.valueOf(quantity));
-        if (DiscountsConfig.isWeekendPromotion() && price.compareTo(BigDecimal.valueOf(5)) > 0) {
-            price = price.subtract(BigDecimal.valueOf(3));
-        }
-        boolean sold = moneyService.pay(customer, price);
-        if (sold) {
+        BigDecimal price = calculatePrice(item, quantity, customer);
+        if (customerMoneyService.canAffordToPay(customer, price)) {
+            customerMoneyService.substractMoney(customer, price);
             return persistenceLayer.saveTransaction(customer, item, quantity);
-        } else {
-            return sold;
         }
+        else
+            return false;
     }
 }
